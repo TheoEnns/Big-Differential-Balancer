@@ -110,12 +110,12 @@ void loop() {
 #ifdef VERBOSE_PRINT
 //    Serial.print("Time: ");
 //    Serial.print((microsNow - microsPrevious)/10000); // blue
-    Serial.print(" ");
-    Serial.print(offset_gx); // purple
-    Serial.print(" ");
-    Serial.print(offset_gy); // purple
-    Serial.print(" ");
-    Serial.print(offset_gz); // purple
+//    Serial.print(" ");
+//    Serial.print(offset_gx); // purple
+//    Serial.print(" ");
+//    Serial.print(offset_gy); // purple
+//    Serial.print(" ");
+//    Serial.print(offset_gz); // purple
 
     // IMU Sensors
 ////    Serial.print("\t ax: ");
@@ -148,8 +148,8 @@ void loop() {
 //    Serial.print(" ");
 //    Serial.print(laz*1000);
 ////    Serial.print("\t lat: ");
-//    Serial.print(" ");
-//    Serial.print( sqrt(laz*laz + lay*lay + lax*lax)*1000 );    
+////    Serial.print(" ");
+////    Serial.print( sqrt(laz*laz + lay*lay + lax*lax)*1000 );    
 ////    Serial.print("\t lgx: ");
 //    Serial.print(" ");
 //    Serial.print(lgx*1000);
@@ -173,12 +173,12 @@ void loop() {
 ////    Serial.print("\t lRoll: ");
 //    Serial.print(" ");
 //    Serial.print(l_roll);
-////    Serial.print("\t Pitch: ");
-//    Serial.print(" ");
-//    Serial.print(k_pitch);
-////    Serial.print("\t Roll: ");
-//    Serial.print(" ");
-//    Serial.print(k_roll);
+//    Serial.print("\t Pitch: ");
+    Serial.print(" ");
+    Serial.print(k_pitch);
+//    Serial.print("\t Roll: ");
+    Serial.print(" ");
+    Serial.print(k_roll);
 
     
     Serial.println(" ");
@@ -194,6 +194,7 @@ void loop() {
 //------------------
 // IMU Processing 
 //------------------
+int stability_counter = 0;
 void updateRawOrientation(){
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(aix, aiy, aiz);
@@ -214,11 +215,15 @@ void updateRawOrientation(){
   gz = (giz) - offset_gz; //  +0.195
 
   float deltaAccel = ax*ax + ay*ay + az*az;
-  float deltaGyro = fabs(giy + gix + giz);
-  if( deltaAccel < 0.99 &&  deltaAccel > 0.95 && deltaGyro < 0.5){
-    offset_gx = offset_gx*inverted_gyro_auto_bias_rate + gix*gyro_auto_bias_rate;
-    offset_gy = offset_gy*inverted_gyro_auto_bias_rate + giy*gyro_auto_bias_rate;
-    offset_gz = offset_gz*inverted_gyro_auto_bias_rate + giz*gyro_auto_bias_rate;
+  float deltaGyro = max(max(fabs(giy),fabs(gix)), fabs(giz));
+  if( deltaAccel < 0.99 &&  deltaAccel > 0.95 && deltaGyro < 2.0){
+    if(stability_counter >= 100){
+      offset_gx = offset_gx*inverted_gyro_auto_bias_rate + gix*gyro_auto_bias_rate;
+      offset_gy = offset_gy*inverted_gyro_auto_bias_rate + giy*gyro_auto_bias_rate;
+      offset_gz = offset_gz*inverted_gyro_auto_bias_rate + giz*gyro_auto_bias_rate;
+    } else {
+      stability_counter++;
+    }
 //    Serial.print(offset_gx);
 //    Serial.print(" ");
 //    Serial.print(offset_gy);
@@ -228,6 +233,7 @@ void updateRawOrientation(){
 //    Serial.print(deltaAccel);
 //    Serial.print(" ");
 //    Serial.println(deltaGyro);
+      stability_counter = 0;
   }
 
   // update the filter, which computes orientation
@@ -255,12 +261,12 @@ void updateFilters(float dt){
   lgz = 0.9 * (lgz) + 0.1 * (gz);
 
   /*Complementary filters to smooth rough pitch and roll estimates*/
-  l_pitch = inv_low_pass_filter * ( l_pitch + ( lgy * dt ) ) + ( low_pass_filter * a_pitch );
+  l_pitch = inv_low_pass_filter * ( l_pitch - ( lgy * dt ) ) + ( low_pass_filter * a_pitch );
   l_roll = inv_low_pass_filter * ( l_roll + ( lgx * dt ) ) + ( low_pass_filter * a_roll );
 
   /*Kalman filter for most accurate pitch estimates*/
-  k_pitch = kalmanPitch.getAngle(l_pitch, lgy, dt);
-  k_roll = kalmanRoll.getAngle(l_roll, lgx, dt);
+  k_pitch = l_pitch; //kalmanPitch.getAngle(l_pitch, lgy, dt);
+  k_roll = l_roll; //kalmanRoll.getAngle(l_roll, lgx, dt);
 
 //  /*Complementary filters to smooth rough pitch and roll estimates*/
 //  l_pitch = inv_low_pass_filter * ( l_pitch + ( gy * dt ) ) + ( low_pass_filter * a_pitch );
