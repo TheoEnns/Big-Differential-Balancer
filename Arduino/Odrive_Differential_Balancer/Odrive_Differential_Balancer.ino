@@ -1,6 +1,4 @@
-#include <Arduino_LSM9DS1.h> //Include the library for 9-axis IMU
-#include <math.h>
-#include <Kalman.h>
+#include "ReferenceCalculator.h"
 #include "Generic_PID.h"
 
 #define VERBOSE_PRINT 1
@@ -15,25 +13,17 @@ int frqHz = 120;
 //------------------
 // IMU Processing 
 //------------------
-Kalman kalmanPitch;
-Kalman kalmanRoll;
-float aix, aiy, aiz; // raw ad value
-float gix, giy, giz; // raw a2d value
-float ax, ay, az; // in g's
-float gx, gy, gz;  // degrees per second
-float a_roll, a_pitch, a_yaw; // acceleration based and raw
-float l_roll, l_pitch, l_yaw; // low pass filtered
-float k_roll, k_pitch, k_yaw; // kalman filtered
-float low_pass_filter = 0.05;
-float inv_low_pass_filter = 1.0 - low_pass_filter;
-float lax, lay, laz; // in g's
-float lgx, lgy, lgz;  // degrees per second
+TwoWheel_TF_Calc myTF;
 
 
 //------------------
 // Physical Shape 
 //------------------
 float wheel_angle_to_perimeter = 2*M_PI*82.55/180;
+int encoder_counter = 0;
+int encoder_read_freq = 40;
+int encoder_read_max_counter = frqHz/encoder_read_freq;
+
 
 //------------------
 // Motor Control 
@@ -42,33 +32,62 @@ bool fallover = false;
 bool runaway = false;
 bool traveling = false;
 bool steady = false;
+
 double right_encoder = 0;
 double left_encoder = 0;
 double last_right_encoder = 0;
 double last_left_encoder = 0;
-double right_distance_error = 0;
-double left_distance_error = 0;
+
+double right_vel_encoder = 0;
+double left_vel_encoder = 0;
+double last_vel_right_encoder = 0;
+double last_vel_left_encoder = 0;
+
+double right_distance= 0;
+double left_distance = 0;
+double right_velocity = 0;
+double left_velocity = 0;
+double right_acceleration = 0;
+double left_acceleration = 0;
+
 double right_target_distance = 0;
 double left_target_distance = 0;
 double right_target_velocity = 0;
 double left_target_velocity = 0;
+double right_target_acceleration = 0;
+double left_target_acceleration = 0;
+
+double right_target_angle = 0;
+double left_target_angle = 0;
+
 double right_impetus = 0;
 double left_impetus = 0;
 double adjusted_pitch = 0;
-double impact_p_factor = 1.0;
-double impact_d_factor = 0.1;
-PID right_distancePID(&right_distance_error, &right_target_velocity, &right_target_distance,
-        0.0, 0.0, 0.0, //double Kp, double Ki, double Kd,
-        DIRECT, -550, 550);
-PID left_distancePID(&left_distance_error, &left_target_velocity, &left_target_distance,
-        0.0, 0.0, 0.0, //double Kp, double Ki, double Kd,
-        DIRECT, -550, 550);
-PID right_pitchPID(&adjusted_pitch, &right_impetus, &right_target_velocity,
+
+double dist_p_factor = 0.10;  // 0.10
+double dist_d_factor = 0.010;  // 0.01
+double angle_p_factor = 0.10;  // 0.10
+double angle_d_factor = 0.010;  // 0.01
+double impact_p_factor = 0.60; // 0.50
+double impact_d_factor = 0.035; //0.04 
+PID right_distancePID(&right_distance, &right_target_velocity, &right_target_distance,
+        dist_p_factor, 0.00, dist_d_factor, //double Kp, double Ki, double Kd,
+        DIRECT,REVERSE, -45, 45);
+PID left_distancePID(&left_distance, &left_target_velocity, &left_target_distance,
+        dist_p_factor, 0.00, dist_d_factor, //double Kp, double Ki, double Kd,
+        DIRECT,REVERSE, -45, 45);
+PID right_anglePID(&right_velocity, &right_target_angle, &right_target_velocity,
+        angle_p_factor, 0.00, angle_d_factor, //double Kp, double Ki, double Kd,
+        DIRECT,REVERSE, -5, 5);
+PID left_anglePID(&left_velocity, &left_target_angle, &left_target_velocity,
+        angle_p_factor, 0.00, angle_d_factor, //double Kp, double Ki, double Kd,
+        DIRECT,REVERSE, -5, 5);
+PID right_pitchPID(&adjusted_pitch, &right_impetus, &right_target_angle, //double* Input, double* Output, double* Setpoint,
         impact_p_factor, 0.0, impact_d_factor, //double Kp, double Ki, double Kd,
-        DIRECT, -45, 45);
-PID left_pitchPID(&adjusted_pitch, &left_impetus, &left_target_velocity,
+        DIRECT,DIRECT, -45, 45);
+PID left_pitchPID(&adjusted_pitch, &left_impetus, &left_target_angle, //double* Input, double* Output, double* Setpoint,
         impact_p_factor, 0.0, impact_d_factor, //double Kp, double Ki, double Kd,
-        DIRECT, -45, 45);
+        DIRECT,DIRECT, -45, 45);
 
 
 void setup() {
@@ -76,16 +95,8 @@ void setup() {
   Serial1.begin(115200);
   Serial1.setTimeout(5);
 
-  // start the IMU and filter
-  if (!IMU.begin()) //Initialize IMU sensor 
-     { Serial.println("Failed to initialize IMU!"); while (1);}
-
   // start the filter(s)
-  updateRawOrientation();
-  k_pitch = l_pitch = a_pitch;
-  k_roll = l_roll = a_roll;
-  kalmanPitch.setAngle(k_pitch);
-  kalmanRoll.setAngle(k_roll);
+  myTF.init();
 
 
   Serial1.println("w axis0.controller.config.control_mode CTRL_MODE_CURRENT_CONTROL");
@@ -94,6 +105,8 @@ void setup() {
   // initialize variables to pace updates to correct rate
   microsPerReading = 1000000 / frqHz;
   microsPrevious = micros();
+  Serial1.println("f 0");
+  Serial1.println("f 1");
 }
 
 bool encoderFlip = true;
@@ -103,18 +116,24 @@ void loop() {
   if (microsNow - microsPrevious >= microsPerReading) {  
     double dt = (microsNow - microsPrevious)*0.000001f; // 1/1000000.0f;
 
-    // Read IMU
-    updateRawOrientation();
-    
-    // update the filters, which compute orientation
-    updateFilters( dt);
+    // Read IMU, update the filters, and compute orientation
+    myTF.calculateOrientation();
 
     //Get Distance Traveled
-    read_encoder(dt);
+    encoder_counter = (encoder_counter+1)%encoder_read_max_counter;
+    if (encoder_counter==0){
+      read_encoder(dt);
+//      right_distancePID.Compute(dt);
+//      left_distancePID.Compute(dt);
+      right_anglePID.Compute(dt);
+      left_anglePID.Compute(dt);
+    }
     
     //Update PIDs
-    adjusted_pitch = k_pitch;
-    update_PID_loops( dt);
+    adjusted_pitch = tan(myTF.getMyPitch()*M_PI/180.0)*180.0/M_PI;//*fabs(myTF.getMyPitch());
+//    update_angle_PID_loops( dt);
+    right_pitchPID.Compute(dt);
+    left_pitchPID.Compute(dt);
     
     //Update Motors
     update_motor_output();
@@ -126,48 +145,16 @@ void loop() {
     Serial.print(microsNow - microsPrevious);
 
     // IMU Sensors
-//    Serial.print("\t ax: ");
-//    Serial.print(ax);
-//    Serial.print("\t ay: ");
-//    Serial.print(ay);
-//    Serial.print("\t az: ");
-//    Serial.print(az);
-//    Serial.print("\t gx: ");
-//    Serial.print(gx);
-//    Serial.print("\t gy: ");
-//    Serial.print(gy);
-//    Serial.print("\t gz: ");
-//    Serial.print(gz);
-
-    // 1000* IMU Sensors Time Averaged
-//    Serial.print("\t lax: ");
-//    Serial.print(lax*1000);
-//    Serial.print("\t lay: ");
-//    Serial.print(lay*1000);
-//    Serial.print("\t laz: ");
-//    Serial.print(laz*1000);
-//    Serial.print("\t lat: ");
-//    Serial.print( sqrt(laz*laz + lay*lay + lax*lax)*1000 );    
-//    Serial.print("\t lgx: ");
-//    Serial.print(lgx*1000);
-//    Serial.print("\t lgy: ");
-//    Serial.print(lgy*1000);
-//    Serial.print("\t lgz: ");
-//    Serial.print(lgz*1000);
-
-    // Bot Angle
-//    Serial.print("\t aPitch: ");
-//    Serial.print(a_pitch);
-//    Serial.print("\t aRoll: ");
-//    Serial.print(a_roll);
-//    Serial.print("\t lPitch: ");
-//    Serial.print(l_pitch);
-//    Serial.print("\t lRoll: ");
-//    Serial.print(l_roll);
+//    Serial.print("\t offset_gx: ");
+//    Serial.print(myTF.offset_gx);
+//    Serial.print("\t offset_gy: ");
+//    Serial.print(myTF.offset_gy);
+//    Serial.print("\t offset_gz: ");
+//    Serial.print(myTF.offset_gz);
     Serial.print("\t Pitch: ");
-    Serial.print(k_pitch);
+    Serial.print(myTF.getMyPitch());
 //    Serial.print("\t Roll: ");
-//    Serial.print(k_roll);
+//    Serial.print(myTF.getMyRoll());
     
     // Motion Values
 //    Serial.print("\t r_enc: ");
@@ -175,15 +162,15 @@ void loop() {
 //    Serial.print("\t l_enc: ");
 //    Serial.print(left_encoder);
 
-    Serial.print("\t r_t_vel: ");
-    Serial.print(right_target_velocity);
-    Serial.print("\t l_t_vel: ");
-    Serial.print(left_target_velocity);
+    Serial.print("\t r_t_ang: ");
+    Serial.print(right_target_angle);
+    Serial.print("\t l_t_ang: ");
+    Serial.print(left_target_angle);
     
-    Serial.print("\t r_dist_err: ");
-    Serial.print(right_distance_error);
-    Serial.print("\t l_dist_err: ");
-    Serial.print(left_distance_error);
+//    Serial.print("\t r_dist_err: ");
+//    Serial.print(right_distance_error);
+//    Serial.print("\t l_dist_err: ");
+//    Serial.print(left_distance_error);
     
     Serial.print("\t right_impetus: ");
     Serial.print(right_impetus);
@@ -197,99 +184,43 @@ void loop() {
   }
 }
 
-
-//------------------
-// IMU Processing 
-//------------------
-void updateRawOrientation(){
-  if (IMU.accelerationAvailable()) {
-    IMU.readAcceleration(aix, aiy, aiz);
-  }else{
-    return;}
-
-  if (IMU.gyroscopeAvailable()) {
-    IMU.readGyroscope(gix, giy, giz);
-  }else{
-    return;}
-
-  // convert from raw data to gravity and degrees/second units
-  ax = (aix)*0.98885; // 1/1.01128
-  ay = (aiy)*0.98885; // 1/1.01128
-  az = (aiz)*0.98885; // 1/1.01128
-  gx = (gix) + (0.000); //  +0.080
-  gy = (giy) + (0.140); //  -0.140
-  gz = (giz) - (0.195); //  +0.195
-
-  // update the filter, which computes orientation
-  a_roll = atan2(-ay, az);
-  a_pitch = atan2(-ax, sqrt(ay*ay + az*az));
-  if (ay * sin(a_roll) + az * cos(a_roll) == 0.0) 
-     a_pitch = ax > 0.0 ? M_PI_2 : -M_PI_2;
-  else 
-     a_pitch = (float)atan(-ax / (ay * sin(a_roll) + az * cos(a_roll)));
-  if (a_roll > 0)
-    a_roll = - (a_roll - M_PI);
-  else
-    a_roll = - (a_roll + M_PI);
-
-  a_roll = a_roll*180.0/M_PI;
-  a_pitch = a_pitch*180.0/M_PI;
-}
-
-void updateFilters(float dt){    
-  lax = 0.9 * (lax) + 0.1 * (ax);
-  lay = 0.9 * (lay) + 0.1 * (ay);
-  laz = 0.9 * (laz) + 0.1 * (az);
-  lgx = 0.9 * (lgx) + 0.1 * (gx);
-  lgy = 0.9 * (lgy) + 0.1 * (gy);
-  lgz = 0.9 * (lgz) + 0.1 * (gz);
-
-  
-
-  /*Complementary filters to smooth rough pitch and roll estimates*/
-  l_pitch = inv_low_pass_filter * ( l_pitch + ( lgy * dt ) ) + ( low_pass_filter * a_pitch );
-  l_roll = inv_low_pass_filter * ( l_roll + ( lgx * dt ) ) + ( low_pass_filter * a_roll );
-
-  /*Kalman filter for most accurate pitch estimates*/
-  k_pitch = kalmanPitch.getAngle(l_pitch, lgy, dt);
-  k_roll = kalmanRoll.getAngle(l_roll, lgx, dt);
-
-//  /*Complementary filters to smooth rough pitch and roll estimates*/
-//  l_pitch = inv_low_pass_filter * ( l_pitch + ( gy * dt ) ) + ( low_pass_filter * a_pitch );
-//  l_roll = inv_low_pass_filter * ( l_roll + ( gx * dt ) ) + ( low_pass_filter * a_roll );
-//
-//  /*Kalman filter for most accurate pitch estimates*/
-//  k_pitch = kalmanPitch.getAngle(l_pitch, gy, dt);
-//  k_roll = kalmanRoll.getAngle(l_roll, gx, dt);
-}
-
 //------------------
 // Motor Control 
 //------------------
 bool read_encoder(double dt){  
-  double velocity;
-  double old_right_distance_error = right_distance_error;
-  double old_left_distance_error = left_distance_error;
+  double old_right_distance = right_distance;
+  double old_left_distance = left_distance;
+  double old_right_velocity = right_velocity;
+  double old_left_velocity = left_velocity;
+  double old_right_acceleration = right_acceleration;
+  double old_left_acceleration = left_acceleration;
 
-  right_encoder = 4.0*Serial1.parseFloat();
-  velocity = 4.0*Serial1.parseFloat();
-  left_encoder = -4.0*Serial1.parseFloat();
-  velocity = -4.0*Serial1.parseFloat();
+  right_encoder = -4.0*Serial1.parseFloat();
+  right_vel_encoder = -4.0*Serial1.parseFloat();
+  left_encoder = 4.0*Serial1.parseFloat();
+  left_vel_encoder = 4.0*Serial1.parseFloat();
 
   if( fabs(right_encoder - last_right_encoder) < 20.0 || fabs(right_encoder - last_right_encoder) < 20.0){
-    right_distance_error += wheel_angle_to_perimeter*(right_encoder - last_right_encoder) - right_target_velocity*dt; // Subtract Off Target Velocity
-    last_right_encoder = right_encoder;
-    
-    left_distance_error += wheel_angle_to_perimeter*(left_encoder - last_left_encoder) - left_target_velocity*dt; // Subtract Off Target Velocity
-    last_left_encoder = left_encoder;
-
-    right_distance_error = 0.95*old_right_distance_error + 0.05*right_distance_error;
-    left_distance_error = 0.95*old_left_distance_error + 0.05*left_distance_error;
+    right_distance = wheel_angle_to_perimeter*right_encoder;
+    left_distance = wheel_angle_to_perimeter*left_encoder;
+    right_velocity = wheel_angle_to_perimeter*right_vel_encoder;
+    left_velocity = wheel_angle_to_perimeter*left_vel_encoder;
+    right_acceleration = (right_velocity - old_right_velocity)/dt;
+    left_acceleration = (left_velocity - old_left_velocity)/dt;
     
   } else {
-    last_left_encoder = left_encoder;
-    last_right_encoder = right_encoder;
+    right_velocity = right_acceleration*dt + right_velocity;
+    left_velocity = left_acceleration*dt + left_velocity;
+    right_distance = right_velocity*dt + right_distance;
+    left_distance = left_velocity*dt + left_distance;
+
+    right_encoder = last_right_encoder + last_vel_right_encoder*dt;
+    left_encoder = last_left_encoder + last_vel_left_encoder*dt;
   }
+  last_left_encoder = left_encoder;
+  last_right_encoder = right_encoder;
+  last_vel_left_encoder = left_vel_encoder;
+  last_vel_right_encoder = right_vel_encoder;
   
   while(Serial1.available()) Serial1.read();
   Serial1.println("f 0");
@@ -298,23 +229,24 @@ bool read_encoder(double dt){
   return true;
 }
 
-bool update_PID_loops(double dt){
+bool update_angle_PID_loops(double dt){
   bool success = true;
-  success = right_distancePID.Compute(dt) && left_distancePID.Compute(dt);
+  //success = right_distancePID.Compute(dt) && left_distancePID.Compute(dt);
   return success && right_pitchPID.Compute(dt) && left_pitchPID.Compute(dt);
 }
 
 bool update_motor_output(){
-  if ( fabs(k_pitch) < 15.0){
+  if ( fabs(myTF.getMyPitch()) < 15.0){
     Serial1.print("c 0 ");
-    Serial1.print( - (right_impetus*1));
+    Serial1.print( - (right_impetus*1.0));
     Serial1.println(" ");
     Serial1.print("c 1 ");
-    Serial1.print((left_impetus*1));
+    Serial1.print((left_impetus*1.0));
     Serial1.println(" ");
     return true;
+  }else{
+    Serial1.println("c 0 0 ");
+    Serial1.println("c 1 0 ");
   }
-  Serial1.println("c 0 0 ");
-  Serial1.println("c 1 0 ");
   return false;
 }

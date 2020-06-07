@@ -14,7 +14,7 @@ class PID
     //commonly used functions **************************************************************************
     PID(double* Input, double* Output, double* Setpoint,
         double Kp, double Ki, double Kd,
-        int polarity, double _min, double _max);
+        int inpolarity, int outpolarity, double _min, double _max);
 
     bool Compute(double deltaTime);
     void SetLimitations(double _min, double _max); 
@@ -22,13 +22,15 @@ class PID
     //available but not commonly used functions ********************************************************
     void SetTunings(double Kp, double Ki, double Kd);     
   
-    void SetPolarity(int _polarity);        
+    void SetInPolarity(int _polarity);     
+    void SetOutPolarity(int _polarity);     
                         
     //Display functions 
     double GetKp();              
     double GetKi();              
     double GetKd();              
-    int GetPolarity();           
+    int GetInPolarity();            
+    int GetOutPolarity();           
 
   private:
     void init();       
@@ -37,7 +39,8 @@ class PID
     double ki;                  
     double kd;                  
     
-    int polarity;
+    int inpolarity;
+    int outpolarity;
   
     double *myInput;              
     double *refOutput;             
@@ -50,7 +53,7 @@ class PID
 /*Constructor */
 PID::PID(double* Input, double* Output, double* Setpoint,
         double Kp, double Ki, double Kd,
-        int polarity, double _min, double _max)
+        int inpolarity, int outpolarity, double _min, double _max)
 {
     refOutput = Output;
     myInput = Input;
@@ -58,7 +61,8 @@ PID::PID(double* Input, double* Output, double* Setpoint,
 
     PID::SetLimitations(_min, _max); 
 
-    PID::SetPolarity(polarity);
+    PID::SetInPolarity(inpolarity);
+    PID::SetOutPolarity(outpolarity);
     PID::SetTunings(Kp, Ki, Kd);
 }
 
@@ -70,6 +74,10 @@ bool PID::Compute(double deltaTime)
 
     /*Compute all the working error variables*/
     double input = *myInput;
+    if(inpolarity == REVERSE)
+    {
+      input = - input;
+    }
     double error = *mySetpoint - input;
     double dInput = (input - lastInput)/deltaTime;
     outputIntegral+= (ki * error)*deltaTime;
@@ -85,6 +93,10 @@ bool PID::Compute(double deltaTime)
     /*Compute Rest of PID Output*/
     output += outputIntegral - kd * dInput;
 
+    if(outpolarity == REVERSE)
+    {
+      output = - output;
+    }
     if(output > maxOutput) 
       output = maxOutput;
     else if (output < minOutput) 
@@ -102,13 +114,6 @@ void PID::SetTunings(double Kp, double Ki, double Kd)
   kp = Kp;
   ki = Ki;
   kd = Kd;
-
-  if(polarity == REVERSE)
-  {
-    kp = -kp;
-    ki = -ki;
-    kd = -kd;
-  }
 }
 
 /* SetLimitations */
@@ -137,6 +142,10 @@ void PID::init()
 {
    outputIntegral = *refOutput;
    lastInput = *myInput;
+   if(inpolarity == REVERSE)
+    {
+      lastInput = - lastInput;
+    }
    if(outputIntegral > maxOutput) 
     outputIntegral = maxOutput;
    else if(outputIntegral < minOutput) 
@@ -144,15 +153,15 @@ void PID::init()
 }
 
 /* SetPolarity */
-void PID::SetPolarity(int _polarity)
+void PID::SetInPolarity(int _polarity)
 {
-   if( _polarity !=polarity)
-   {
-      kp = -kp;
-      ki = -ki;
-      kd = -kd;
-   }
-   polarity = _polarity;
+   inpolarity = _polarity;
+}
+
+/* SetPolarity */
+void PID::SetOutPolarity(int _polarity)
+{
+  outpolarity = _polarity;
 }
 
 /* Getter Accessors */
@@ -171,9 +180,14 @@ double PID::GetKd()
   return  kd;
 }
 
-int PID::GetPolarity()
+int PID::GetInPolarity()
 { 
-  return polarity;
+  return inpolarity;
+}
+
+int PID::GetOutPolarity()
+{ 
+  return outpolarity;
 }
 
 #endif GENERIC_PID
