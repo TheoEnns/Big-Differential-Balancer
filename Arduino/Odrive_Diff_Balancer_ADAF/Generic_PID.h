@@ -12,48 +12,48 @@ class PID
     #define REVERSE  1
   
     //commonly used functions **************************************************************************
-    PID(double* Input, double* Output, double* Setpoint,
-        double Kp, double Ki, double Kd,
-        int inpolarity, int outpolarity, double _min, double _max);
+    PID(float* Input, float* Output, float* Setpoint,
+        float Kp, float Ki, float Kd,
+        int inpolarity, int outpolarity, float _min, float _max);
 
-    bool Compute(double deltaTime);
-    void SetLimitations(double _min, double _max); 
+    bool Compute(float deltaTime);
+    void SetLimitations(float _min, float _max); 
     
     //available but not commonly used functions ********************************************************
-    void SetTunings(double Kp, double Ki, double Kd);     
+    void SetTunings(float Kp, float Ki, float Kd);     
   
     void SetInPolarity(int _polarity);     
     void SetOutPolarity(int _polarity);     
                         
     //Display functions 
-    double GetKp();              
-    double GetKi();              
-    double GetKd();              
+    float GetKp();              
+    float GetKi();              
+    float GetKd();              
     int GetInPolarity();            
     int GetOutPolarity();           
 
-  private:
-    void init();       
-
-    double kp;           
-    double ki;                  
-    double kd;                  
+    void init();   
+    
+  private:    
+    float kp;           
+    float ki;                  
+    float kd;                  
     
     int inpolarity;
     int outpolarity;
   
-    double *myInput;              
-    double *refOutput;             
-    double *mySetpoint;      
+    float *myInput;              
+    float *refOutput;             
+    float *mySetpoint;      
     
-    double outputIntegral, lastInput;
-    double minOutput, maxOutput;
+    float outputIntegral, lastInput;
+    float minOutput, maxOutput;
 };
 
 /*Constructor */
-PID::PID(double* Input, double* Output, double* Setpoint,
-        double Kp, double Ki, double Kd,
-        int inpolarity, int outpolarity, double _min, double _max)
+PID::PID(float* Input, float* Output, float* Setpoint,
+        float Kp, float Ki, float Kd,
+        int inpolarity, int outpolarity, float _min, float _max)
 {
     refOutput = Output;
     myInput = Input;
@@ -68,18 +68,18 @@ PID::PID(double* Input, double* Output, double* Setpoint,
 
 
 /* Compute() */
-bool PID::Compute(double deltaTime)
+bool PID::Compute(float deltaTime)
 {
-   //double timeChange = deltaTime;
+   //float timeChange = deltaTime;
 
     /*Compute all the working error variables*/
-    double input = *myInput;
+    float input = *myInput;
     if(inpolarity == REVERSE)
     {
       input = - input;
     }
-    double error = *mySetpoint - input;
-    double dInput = (input - lastInput)/deltaTime;
+    float error = *mySetpoint - input;
+    float dInput = (input - lastInput)/deltaTime;
     outputIntegral+= (ki * error)*deltaTime;
 
     if(outputIntegral > maxOutput) 
@@ -87,7 +87,7 @@ bool PID::Compute(double deltaTime)
     else if(outputIntegral < minOutput) 
       outputIntegral= minOutput;
 
-    double output;
+    float output;
     output = kp * error;
 
     /*Compute Rest of PID Output*/
@@ -105,11 +105,12 @@ bool PID::Compute(double deltaTime)
 
     /*Remember some variables for next time*/
     lastInput = input;
+    
     return true;
 }
 
 /* SetTunings */
-void PID::SetTunings(double Kp, double Ki, double Kd)
+void PID::SetTunings(float Kp, float Ki, float Kd)
 {
   kp = Kp;
   ki = Ki;
@@ -117,7 +118,7 @@ void PID::SetTunings(double Kp, double Ki, double Kd)
 }
 
 /* SetLimitations */
-void PID::SetLimitations(double _min, double _max)
+void PID::SetLimitations(float _min, float _max)
 {
    if(_min >= _max) 
      return;
@@ -140,7 +141,7 @@ void PID::SetLimitations(double _min, double _max)
 /* init() */
 void PID::init()
 {
-   outputIntegral = *refOutput;
+   outputIntegral = 0;
    lastInput = *myInput;
    if(inpolarity == REVERSE)
     {
@@ -165,17 +166,17 @@ void PID::SetOutPolarity(int _polarity)
 }
 
 /* Getter Accessors */
-double PID::GetKp()
+float PID::GetKp()
 {
   return  kp; 
 }
 
-double PID::GetKi()
+float PID::GetKi()
 {
   return  ki;
 }
 
-double PID::GetKd()
+float PID::GetKd()
 { 
   return  kd;
 }

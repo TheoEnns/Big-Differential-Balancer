@@ -1,5 +1,11 @@
 #include "Arduino.h"
 
+/**************
+ * Notes
+ *   - For the ADAF MCU, the floating point math is in fact faster than double
+ *     Time to process heading is 4.05ms on average with doubles vs 3.82ms with floats
+ */
+
 #ifndef REFERENCE_CALCULATOR
 #define REFERENCE_CALCULATOR
 
@@ -113,10 +119,11 @@ void IMU_TF_Calc::init()
  
   sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
   sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
-  sox.setAccelDataRate(LSM6DS_RATE_3_33K_HZ);
+  sox.setAccelDataRate(LSM6DS_RATE_208_HZ);
+  sox.setGyroDataRate(LSM6DS_RATE_208_HZ);
+//  sox.setAccelDataRate(LSM6DS_RATE_416_HZ);
+//  sox.setGyroDataRate(LSM6DS_RATE_416_HZ);
   
- 
-  sox.setGyroDataRate(LSM6DS_RATE_3_33K_HZ);
 #ifdef DEBUG_IMUINIT
   {
     Serial.print("Gyro data rate set to: ");
